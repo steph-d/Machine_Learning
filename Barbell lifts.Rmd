@@ -1,0 +1,156 @@
+---
+title: 'Human activity recognition: Weight Lifting Exercises'
+author: "Stéphanie Depickère"
+date: "Friday, September 25, 2015"
+output: html_document
+---
+
+# Sinopsis
+This is an exercice about machine learning. I use the free data available about human activity recognition. Weight Lifting Exercices were done by 6 people in a good way (class A) and in reproducing common errors (class B to E). Using the data available, I constructed several models and finally I can predict the class with an accurancy > 0.95. 
+
+
+# Introduction
+
+The human activity recognition research has traditionally focused on discriminating between different activities, i.e. to predict "which" activity was performed at a specific point in time. I will investigate a dataset about Weight Lifting Exercises to predict "how (well)" an activity was performed by the wearer. The "how (well)" investigation has only received little attention so far, even though it potentially provides useful information for a large variety of applications, such as sports training.    
+    
+Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).    
+    
+Class A corresponds to the specified execution of the exercise, while the other 4 classes correspond to common mistakes. Participants were supervised by an experienced weight lifter to make sure the execution complied to the manner they were supposed to simulate. The exercises were performed by six male participants aged between 20-28 years, with little weight lifting experience. We made sure that all participants could easily simulate the mistakes in a safe and controlled manner by using a relatively light dumbbell (1.25kg).
+
+
+
+
+# Read the data
+   
+The dataset is freely available at http://groupware.les.inf.puc-rio.br/har. 
+As this exercice is part of the Coursera MOOC "Machine Learning", we have a full dataset called traintest (160 variables and 19622 observations) with which we have to construict a classification model and experiment it; and a validation dataset for which we have to classify the different exercices in a class from A to E. 
+     
+```{r}
+setwd("D:/R/R-travail/MOOC R programming march2015/8-Machine Learning")
+getwd()
+traintest <- read.csv("pml-training.csv", na.strings="#DIV/O!")
+validation <- read.csv("pml-testing.csv", sep=",")
+library(caret)
+library(ggplot2)
+library(moments)
+
+# good columns' format
+colnum <- c(12:36,50:59,69:83,87:101,103:112,125:139,141:150)
+     for(i in colnum){traintest[,i]<-as.numeric(as.character(traintest[,i]))}
+     for(i in colnum){validation[,i]<-as.numeric(as.character(validation[,i]))}
+```
+
+# Create training and testing data sets
+
+The first step is to separate the dataset into a training part and a testing part.
+```{r}
+set.seed(36987)
+InTrain <- createDataPartition(y=traintest$classe, p=0.7, list=FALSE)
+training <- traintest[InTrain,]
+testing <- traintest[-InTrain,]
+```
+
+# Exploratory analysis and selection of features
+
+Secondly, we have to explore the training dataset in order to see the characterististics of each variables, and decide if a pre-processing is needed. 
+
+## variables with no variability or a lot of NA
+```{r}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+featurenul <- row.names(subset(nsv, nsv$zeroVar==TRUE))
+nbfeaturenul <- which(colnames(training) %in% featurenul)
+print(featurenul)
+```
+
+These 6 variables cannot help in explaining at which class the exercices belong.    
+
+```{r}
+na_count <-sapply(training[,-nbfeaturenul], function(y) sum(length(which(is.na(y)))))
+na_count <- as.data.frame(na_count)
+# a lot of variables have more than 13400 NA, which is more than 97% of the values. They don't have to enter in our model.
+featureNA <- row.names(subset(na_count, na_count!=0))
+nbfeatureNA <- which(colnames(training) %in% featureNA)
+
+# finally, features 1 to 7 will not enter to the model because they are just descriptive features (which perfrom the action, etc). So the final features that will enter into the model are:
+
+featuregood <- c(1:160)
+featuregood <- featuregood[-c(1:7,nbfeatureNA,nbfeaturenul)]
+dim(training[,featuregood])
+```
+
+So now we have 53 variables with which we can work.
+    
+## search of a need of a pre-processing
+
+```{r}
+skewness(training[,featuregood[1:52]])
+kurtosis(training[,featuregood[1:52]])
+```
+
+We can see that variables are left- or right-skewed and that some of them are platy- or leptokurtic. That indicates that a standardization of the variables is necessary as a pre-processing.    
+
+
+```{r}
+M <- abs(cor(training[,featuregood[1:52]]))
+diag(M) <- 0 # diag=cor(x1 by x1)=1 so not interesting. So put = 0
+dim(which(M > 0.8, arr.ind=T))
+```
+
+So we have 38/2=19 variables with are correlated (we have to divide by 2 because  correlation 1 vs. 2 is repeated as correlation 2 vs. 1). So another pre-processing is needed: PCA (which includes "center" and "scale") .
+    
+# Model
+
+## Model 1
+The model consists in 
+- pre-processing: pca (which standardize the data automatically)     
+- a cross validation consisting in a 5 repeats of 10-Fold cross validation
+- base of the model: tree
+
+```{r}
+feature <- names(training[,featuregood[1:52]])
+fmla <- as.formula(paste("classe ~ ", paste(feature, collapse= "+")))
+ctrl <- trainControl(method = "repeatedcv", repeats=5, number=10)
+
+# Model1: tree
+
+model1 <- train(fmla, data=training, method="rpart",preProcess=c("pca"), trControl=ctrl)
+print(model1$finalModel)
+predictions <- predict(model1, newdata=testing) 
+confusionMatrix(predictions, testing$classe)
+predictions <- predict(model1, newdata=validation)
+```
+
+The accuracy of the model is not so good (0.40), classes are not well-distinguished.
+
+## Model 2:
+The model consists in 
+- pre-processing: pca (which standardizes the data automatically)     
+- a cross validation consisting in a 5 repeats of 10-Fold cross validation
+- base of the model: boosting with tree 
+
+```{r}
+model3 <- train(fmla, method="gbm",data=training,verbose=FALSE, preProcess="pca", trControl=ctrl)
+print(model3)
+predictions3 <- predict(model3, newdata=testing)
+confusionMatrix(predictions3, testing$classe)
+predictions3 <- predict(model3, newdata=validation)
+```
+
+The accuracy of the model is better, being 0.8.
+
+## Model 3:
+The model consists in 
+- pre-processing: pca (which standardizes the data automatically)     
+- a cross validation consisting in a 5 repeats of 10-Fold cross validation
+- base of the model: bagging with tree (treebag)
+
+```{r}
+model4 <- train(fmla, data=training, method="treebag", preProcess="pca", trControl=ctrl)
+print(model4)
+predictions4 <- predict(model4, newdata=testing)
+confusionMatrix(predictions4, testing$classe)
+predictions4 <- predict(model4, newdata=validation)
+
+```
+
+This is the best model, with an accuracy of 0.95. The sensitivity (>0.92) and the specificity (>0.97) is high for all the classes. 
